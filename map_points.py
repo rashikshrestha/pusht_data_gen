@@ -34,23 +34,24 @@ print("Rendered image shape:", image.shape)
 # get: agent_x, agent_y, block_x, block_y, block_angle
 ax, ay, bx, by, ba = observation
 
-# T-block local corners in environment coordinates
+# T-block local points in environment coordinates
 # (same dimensions used in PushTEnv.add_tee: length=4, scale=30)
 scale = 30.0
 length = 4.0
-t_local_corners = np.array(
-    [
-        [-length * scale / 2, scale],
-        [length * scale / 2, scale],
-        [length * scale / 2, 0],
-        [-length * scale / 2, 0],
-        [-scale / 2, scale],
-        [-scale / 2, length * scale],
-        [scale / 2, length * scale],
-        [scale / 2, scale],
-    ],
-    dtype=np.float64,
+point_spacing = 6.0
+x_vals = np.arange(-length * scale / 2, length * scale / 2 + 1e-9, point_spacing)
+y_vals = np.arange(0.0, length * scale + 1e-9, point_spacing)
+xx, yy = np.meshgrid(x_vals, y_vals)
+grid_points = np.column_stack([xx.ravel(), yy.ravel()])
+
+# Union of two rectangles:
+# 1) top bar: x in [-2s, 2s], y in [0, s]
+# 2) stem:    x in [-s/2, s/2], y in [s, 4s]
+is_top_bar = (np.abs(grid_points[:, 0]) <= (length * scale / 2)) & (grid_points[:, 1] <= scale)
+is_stem = (np.abs(grid_points[:, 0]) <= (scale / 2)) & (grid_points[:, 1] >= scale) & (
+    grid_points[:, 1] <= (length * scale)
 )
+t_local_points = grid_points[is_top_bar | is_stem]
 
 # Rotate + translate corners to world coordinates
 rotation = np.array(
@@ -60,20 +61,17 @@ rotation = np.array(
     ],
     dtype=np.float64,
 )
-t_world_corners = t_local_corners @ rotation.T + np.array([bx, by], dtype=np.float64)
+t_world_points = t_local_points @ rotation.T + np.array([bx, by], dtype=np.float64)
 
 # Convert world [0, 512] -> image [0, 680]
 bx_img = (bx / 512.0) * 680.0
 by_img = (by / 512.0) * 680.0
-t_image_corners = (t_world_corners / 512.0) * 680.0
+t_image_points = (t_world_points / 512.0) * 680.0
 
-print("T-block world corners (x, y):")
-for i, (cx, cy) in enumerate(t_world_corners):
-    print(f"  c{i}: ({cx:.2f}, {cy:.2f})")
-
-print("T-block image corners (x, y):")
-for i, (cx, cy) in enumerate(t_image_corners):
-    print(f"  c{i}: ({cx:.2f}, {cy:.2f})")
+print(f"Generated {len(t_local_points)} local points covering the T block")
+print("Sample world points (first 10):")
+for i, (px, py) in enumerate(t_world_points[:10]):
+    print(f"  p{i}: ({px:.2f}, {py:.2f})")
 
 
 Image.fromarray(image).convert("RGB").save('raw.jpg', format="JPEG")
@@ -83,11 +81,9 @@ print(f"Saved render to raw.jpg")
 fig, ax_plot = plt.subplots(1, 1, figsize=(7, 7))
 ax_plot.imshow(image)
 ax_plot.scatter([bx_img], [by_img], c='red', s=100, zorder=5, label=f'center ({bx_img:.1f}, {by_img:.1f})')
-ax_plot.scatter(t_image_corners[:, 0], t_image_corners[:, 1], c='yellow', s=70, zorder=6, label='T corners')
-for i, (cx, cy) in enumerate(t_image_corners):
-    ax_plot.text(cx + 5, cy + 5, f'c{i}', color='black', fontsize=9, zorder=7)
+ax_plot.scatter(t_image_points[:, 0], t_image_points[:, 1], c='yellow', s=18, alpha=0.9, zorder=6, label='T coverage points')
 ax_plot.legend(loc='upper right')
-ax_plot.set_title('Block position (bx, by)')
+ax_plot.set_title('Block position and T coverage points')
 ax_plot.set_xlabel('X (pixels)')
 ax_plot.set_ylabel('Y (pixels)')
 # ax_plot.axis('off')
