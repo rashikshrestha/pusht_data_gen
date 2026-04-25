@@ -6,31 +6,6 @@ from PIL import Image
 import matplotlib.pyplot as plt
 
 
-def create_env():
-    return gym.make(
-        "gym_pusht/PushT-v0",
-        render_mode="rgb_array",
-        observation_width=96,
-        observation_height=96,
-        visualization_width=680,
-        visualization_height=680,
-    )
-
-
-def run_single_step(env):
-    observation, info = env.reset()
-    print("Observation:", observation)
-    print("Info:", info)
-
-    action = env.action_space.sample()
-    print("Action:", action)
-
-    observation, reward, terminated, truncated, info = env.step(action)
-    image = env.render()  # (680, 680, 3) numpy array
-    print("Rendered image shape:", image.shape)
-    return observation, action, image
-
-
 def generate_t_local_points(scale=30.0, length=4.0, point_spacing=6.0):
     x_vals = np.arange(-length * scale / 2, length * scale / 2 + 1e-9, point_spacing)
     y_vals = np.arange(0.0, length * scale + 1e-9, point_spacing)
@@ -64,7 +39,7 @@ def save_raw_image(image, output_path="raw.jpg"):
     print(f"Saved render to {output_path}")
 
 
-def plot_t_coverage(image, bx_img, by_img, ax_img, ay_img, action_img, t_image_points, ba, output_path="plot_bx_by.png"):
+def plot_t_coverage(image, center_image, agent_image, action_img, t_image_points, output_path="plot_bx_by.png"):
     fig, ax_plot = plt.subplots(1, 1, figsize=(7, 7))
     ax_plot.imshow(image)
     ax_plot.scatter(
@@ -76,9 +51,9 @@ def plot_t_coverage(image, bx_img, by_img, ax_img, ay_img, action_img, t_image_p
         zorder=6,
         label="Body",
     )
-    ax_plot.scatter([bx_img], [by_img], c="red", s=100, zorder=5, label="Center")
-    ax_plot.scatter([ax_img], [ay_img], c="cyan", s=500, zorder=5, label="Agent")
-    ax_plot.scatter([action_img[0]], [action_img[1]], c="lime", s=200, marker="*", zorder=7, label=f"Actio")
+    ax_plot.scatter([center_image[0]], [center_image[1]], c="red", s=100, zorder=5, label="Center")
+    ax_plot.scatter([agent_image[0]], [agent_image[1]], c="cyan", s=500, zorder=5, label="Agent")
+    ax_plot.scatter([action_img[0]], [action_img[1]], c="lime", s=200, marker="*", zorder=7, label="Action")
     ax_plot.legend(loc="upper right")
     ax_plot.set_title("Block position and T coverage points")
     ax_plot.set_xlabel("X (pixels)")
@@ -86,7 +61,31 @@ def plot_t_coverage(image, bx_img, by_img, ax_img, ay_img, action_img, t_image_p
     plt.tight_layout()
     plt.savefig(output_path, dpi=150)
     plt.close(fig)
-    print(f"Saved matplotlib plot to {output_path} (center=({bx_img:.2f}, {by_img:.2f}), angle={ba:.3f} rad)")
+    print(f"Saved matplotlib plot to {output_path} (center=({center_image[0]:.2f}, {center_image[1]:.2f}))")
+
+
+def compute_image_points(observation, action, scale=30.0, length=4.0, point_spacing=6.0):
+    """Return body coverage points, block center, agent point, and action point — all in image coordinates.
+
+    Returns:
+        body_image:   (N, 2) array of T-coverage points in image coords
+        center_image: (2,)   block center in image coords
+        agent_image:  (2,)   agent position in image coords
+        action_image: (2,)   sampled action target in image coords
+        t_world_points: (N, 2) body points in world coords (for diagnostics)
+        t_local_points: (N, 2) body points in local coords (for diagnostics)
+    """
+    ax, ay, bx, by, ba = observation
+
+    t_local_points = generate_t_local_points(scale=scale, length=length, point_spacing=point_spacing)
+    t_world_points = transform_points_to_world(t_local_points, bx, by, ba)
+    body_image = world_to_image(t_world_points)
+
+    center_image = world_to_image(np.array([[bx, by]], dtype=np.float64))[0]
+    agent_image = world_to_image(np.array([[ax, ay]], dtype=np.float64))[0]
+    action_image = world_to_image(np.array([action], dtype=np.float64))[0]
+
+    return body_image, center_image, agent_image, action_image, t_world_points, t_local_points
 
 
 def print_point_summary(t_local_points, t_world_points):
@@ -97,29 +96,27 @@ def print_point_summary(t_local_points, t_world_points):
 
 
 def main():
-    env = create_env()
+    #! Create Env
+    env = gym.make(
+        "gym_pusht/PushT-v0",
+        render_mode="rgb_array",
+        observation_width=96,
+        observation_height=96,
+        visualization_width=680,
+        visualization_height=680,
+    )
+
     try:
-        observation, action, image = run_single_step(env)
-        ax, ay, bx, by, ba = observation
+        observation, info = env.reset()
+        action = env.action_space.sample()
+        observation, reward, terminated, truncated, info = env.step(action)
+        image = env.render()  # (680, 680, 3)
 
-        t_local_points = generate_t_local_points(scale=30.0, length=4.0, point_spacing=6.0)
-        t_world_points = transform_points_to_world(t_local_points, bx, by, ba)
-
-        center_world = np.array([[bx, by]], dtype=np.float64)
-        center_image = world_to_image(center_world)
-        bx_img, by_img = center_image[0]
-
-        action_world = np.array([[ax, ay]], dtype=np.float64)
-        action_image = world_to_image(action_world)
-        ax_img, ay_img = action_image[0]
-
-        action_img = world_to_image(np.array([action], dtype=np.float64))[0]
-
-        t_image_points = world_to_image(t_world_points)
+        body_image, center_image, agent_image, action_image, t_world_points, t_local_points = compute_image_points(observation, action)
 
         print_point_summary(t_local_points, t_world_points)
         save_raw_image(image, output_path="raw.jpg")
-        plot_t_coverage(image, bx_img, by_img, ax_img, ay_img, action_img, t_image_points, ba, output_path="plot_bx_by.png")
+        plot_t_coverage(image, center_image, agent_image, action_image, body_image, output_path="mapped.png")
     finally:
         env.close()
         pygame.quit()
