@@ -40,3 +40,29 @@ The action specifies the **target position** the agent should move toward, in pi
 | Example | `[84., 169.]` | `[345.84, 410.22]` |
 
 The environment applies velocity/physics to move the agent from `pos_agent` toward the `action` target each timestep.
+
+## T-Block Geometry
+
+Defined in `add_tee()` with `scale=30` and `length=4` (simulation/pixel units).
+
+**Horizontal bar:**
+
+```
+x: -length*scale/2  to  length*scale/2  →  -60 to 60  →  width  = 120
+y:  0               to  scale           →    0 to 30   →  height =  30
+```
+
+**Vertical stem:**
+
+```
+x: -scale/2  to  scale/2       →  -15 to 15  →  width  =  30
+y:  scale    to  length*scale  →   30 to 120  →  height =  90
+```
+
+| Part | Width (px) | Height (px) |
+|---|---|---|
+| Horizontal bar | 120 | 30 |
+| Vertical stem | 30 | 90 |
+| Full bounding box | 120 | 120 |
+
+Arm thickness = `scale = 30 px`. The T fits inside a 120×120 square and is symmetric about the vertical axis.
