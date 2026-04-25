@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "gym-pusht>=0.1.6",
+    "matplotlib>=3.10.9",
     "pillow>=11.0.0",
     "pymunk==6.6.0",
 ]
