@@ -61,7 +61,7 @@ def plot_t_coverage(image, origin_point, agent_point, action_point, body_points,
     print(f"Saved matplotlib plot to {output_path} (center=({origin_point[0]:.2f}, {origin_point[1]:.2f}))")
 
 
-def plot_3d_points(points_3d, center_point_3d=None, agent_point_3d=None, output_path="mapped_3d.png"):
+def plot_3d_points(points_3d, center_point_3d=None, agent_point_3d=None, action_point_3d=None, output_path="mapped_3d.png"):
     fig = plt.figure(figsize=(8, 7))
     ax = fig.add_subplot(111, projection="3d")
     ax.scatter(points_3d[:, 0], points_3d[:, 1], points_3d[:, 2], c=points_3d[:, 2], cmap="viridis", s=8)
@@ -71,7 +71,7 @@ def plot_3d_points(points_3d, center_point_3d=None, agent_point_3d=None, output_
             [center_point_3d[1]],
             [center_point_3d[2]],
             c="red",
-            s=100,
+            s=200,
             marker="o",
             label="Center 3D",
         )
@@ -85,6 +85,16 @@ def plot_3d_points(points_3d, center_point_3d=None, agent_point_3d=None, output_
             marker="^",
             label="Agent 3D",
         )
+    if action_point_3d is not None:
+        ax.scatter(
+            [action_point_3d[0]],
+            [action_point_3d[1]],
+            [action_point_3d[2]],
+            c="lime",
+            s=180,
+            marker="*",
+            label="Action 3D",
+        )
     ax.set_title("Extruded T-body 3D points")
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
@@ -93,7 +103,7 @@ def plot_3d_points(points_3d, center_point_3d=None, agent_point_3d=None, output_
     ax.set_xlim(0, 680)
     ax.set_ylim(0, 680)
     ax.set_zlim(0, 680)
-    if center_point_3d is not None or agent_point_3d is not None:
+    if center_point_3d is not None or agent_point_3d is not None or action_point_3d is not None:
         ax.legend(loc="upper right")
     plt.tight_layout()
     plt.savefig(output_path, dpi=150)

@@ -46,6 +46,7 @@ def main():
             body_points_3d,
             center_point_3d=center_point_3d,
             agent_point_3d=agent_point_3d,
+            action_point_3d=action_point_3d,
             output_path="mapped_3d.png",
         )
     finally:
