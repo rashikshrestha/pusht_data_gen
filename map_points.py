@@ -112,7 +112,11 @@ def main():
         observation, reward, terminated, truncated, info = env.step(action)
         image = env.render()  # (680, 680, 3)
 
-        body_image, center_image, agent_image, action_image, t_world_points, t_local_points = compute_image_points(observation, action)
+        body_image, center_image, agent_image, action_image, t_world_points, t_local_points = compute_image_points(
+            observation, action,
+            point_spacing=9.0
+        )
+
 
         print_point_summary(t_local_points, t_world_points)
         save_raw_image(image, output_path="raw.jpg")
