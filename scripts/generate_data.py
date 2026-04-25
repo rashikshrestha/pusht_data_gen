@@ -14,6 +14,25 @@ def parse_args():
 	parser.add_argument("--passes", type=int, default=6, help="Number of straight-line passes to collect.")
 	parser.add_argument("--steps-per-pass", type=int, default=200, help="Number of actions in each straight-line pass.")
 	parser.add_argument(
+		"--reset-every-pass",
+		action=argparse.BooleanOptionalAction,
+		default=True,
+		help="Whether to reset environment before each pass (default: true).",
+	)
+	parser.add_argument(
+		"--target-noise",
+		type=float,
+		default=15.0,
+		help="Uniform XY noise added to block center when planning pass target (range: [-n, +n]).",
+	)
+	parser.add_argument(
+		"--action-noise",
+		type=float,
+		default=5.0,
+		help="Uniform XY noise added to each action (range: [-n, +n]).",
+	)
+	parser.add_argument("--gif-duration-ms", type=int, default=50, help="Frame duration for output GIF in milliseconds.")
+	parser.add_argument(
 		"--output-dir",
 		type=str,
 		default=None,
@@ -37,6 +56,7 @@ def make_output_dir(output_dir_arg: str | None) -> Path:
 	out_dir.mkdir(parents=True, exist_ok=True)
 	(out_dir / "images").mkdir(parents=True, exist_ok=True)
 	(out_dir / "frames").mkdir(parents=True, exist_ok=True)
+	(out_dir / "obs").mkdir(parents=True, exist_ok=True)
 	return out_dir
 
 
@@ -91,14 +111,113 @@ def generate_pass_actions_through_block(block_center: np.ndarray, steps_per_pass
 	return actions, start, end
 
 
-def save_frame(out_dir: Path, frame_idx: int, image: np.ndarray, observation: np.ndarray, action: np.ndarray):
+def add_target_noise(block_center: np.ndarray, noise_limit: float, rng: np.random.Generator):
+	noise = rng.uniform(-noise_limit, noise_limit, size=2)
+	noisy_target = np.clip(block_center + noise, 0.0, 512.0)
+	return noisy_target
+
+
+def add_action_noise(action: np.ndarray, noise_limit: float, rng: np.random.Generator):
+	noise = rng.uniform(-noise_limit, noise_limit, size=2)
+	noisy_action = np.clip(action + noise, 0.0, 512.0)
+	return noisy_action.astype(np.float32)
+
+
+def _to_python(obj):
+	if isinstance(obj, np.ndarray):
+		return obj.tolist()
+	if isinstance(obj, np.generic):
+		return obj.item()
+	if isinstance(obj, dict):
+		return {str(k): _to_python(v) for k, v in obj.items()}
+	if isinstance(obj, (list, tuple)):
+		return [_to_python(v) for v in obj]
+	return obj
+
+
+def _yaml_scalar(value):
+	if isinstance(value, bool):
+		return "true" if value else "false"
+	if value is None:
+		return "null"
+	if isinstance(value, str):
+		return json.dumps(value)
+	return str(value)
+
+
+def _write_yaml(f, data, indent=0):
+	space = " " * indent
+	if isinstance(data, dict):
+		for key, value in data.items():
+			if isinstance(value, (dict, list)):
+				f.write(f"{space}{key}:\n")
+				_write_yaml(f, value, indent + 2)
+			else:
+				f.write(f"{space}{key}: {_yaml_scalar(value)}\n")
+		return
+
+	if isinstance(data, list):
+		for value in data:
+			if isinstance(value, (dict, list)):
+				f.write(f"{space}-\n")
+				_write_yaml(f, value, indent + 2)
+			else:
+				f.write(f"{space}- {_yaml_scalar(value)}\n")
+		return
+
+	f.write(f"{space}{_yaml_scalar(data)}\n")
+
+
+def save_frame(
+	out_dir: Path,
+	frame_idx: int,
+	image: np.ndarray,
+	observation: np.ndarray,
+	action: np.ndarray,
+	info: dict,
+):
 	image_path = out_dir / "images" / f"frame_{frame_idx:06d}.png"
 	frame_path = out_dir / "frames" / f"frame_{frame_idx:06d}.npz"
+	obs_path = out_dir / "obs" / f"frame_{frame_idx:06d}.yaml"
 
 	Image.fromarray(image).save(image_path)
 	np.savez_compressed(frame_path, observation=observation, action=action)
 
-	return image_path, frame_path
+	info_clean = _to_python(info)
+	action_values = [float(x) for x in np.asarray(action).reshape(-1)]
+	yaml_payload = {
+		"frame_index": frame_idx,
+		"action": action_values,
+	}
+	if isinstance(info_clean, dict):
+		yaml_payload.update(info_clean)
+	else:
+		yaml_payload["info"] = info_clean
+
+	with obs_path.open("w", encoding="utf-8") as f:
+		_write_yaml(f, yaml_payload, indent=0)
+
+	return image_path, frame_path, obs_path
+
+
+def save_gif(image_paths: list[Path], output_path: Path, duration_ms: int = 50):
+	if not image_paths:
+		return None
+
+	frames = [Image.open(path).convert("RGB") for path in image_paths]
+	try:
+		frames[0].save(
+			output_path,
+			save_all=True,
+			append_images=frames[1:],
+			duration=duration_ms,
+			loop=0,
+		)
+	finally:
+		for frame in frames:
+			frame.close()
+
+	return output_path
 
 
 def main():
@@ -110,6 +229,10 @@ def main():
 	manifest = {
 		"passes": args.passes,
 		"steps_per_pass": args.steps_per_pass,
+		"reset_every_pass": args.reset_every_pass,
+		"target_noise": args.target_noise,
+		"action_noise": args.action_noise,
+		"gif_duration_ms": args.gif_duration_ms,
 		"seed": args.seed,
 		"observation_shape": [5],
 		"action_shape": [2],
@@ -117,45 +240,66 @@ def main():
 	}
 
 	global_frame_idx = 0
+	saved_image_paths: list[Path] = []
 
 	try:
+		observation, info = env.reset()
+		should_stop = False
 		for pass_idx in range(args.passes):
-			observation, info = env.reset()
+			if args.reset_every_pass and pass_idx > 0:
+				observation, info = env.reset()
+
 			block_center = np.array([observation[2], observation[3]], dtype=np.float64)
+			target_point = add_target_noise(block_center, noise_limit=args.target_noise, rng=rng)
 			actions, line_start, line_end = generate_pass_actions_through_block(
-				block_center=block_center,
+				block_center=target_point,
 				steps_per_pass=args.steps_per_pass,
 				rng=rng,
 			)
 
 			for step_idx, action in enumerate(actions):
-				observation, reward, terminated, truncated, info = env.step(action)
+				action_noisy = add_action_noise(action, noise_limit=args.action_noise, rng=rng)
+				observation, reward, terminated, truncated, info = env.step(action_noisy)
 				image = env.render()
 
-				image_path, frame_path = save_frame(
+				image_path, frame_path, obs_path = save_frame(
 					out_dir=out_dir,
 					frame_idx=global_frame_idx,
 					image=image,
 					observation=observation,
-					action=action,
+					action=action_noisy,
+					info=info,
 				)
+				saved_image_paths.append(image_path)
 
 				manifest["frames"].append(
 					{
 						"frame_index": global_frame_idx,
 						"pass_index": pass_idx,
 						"step_index": step_idx,
+						"block_center": [float(block_center[0]), float(block_center[1])],
+						"target_point": [float(target_point[0]), float(target_point[1])],
 						"line_start": [float(line_start[0]), float(line_start[1])],
 						"line_end": [float(line_end[0]), float(line_end[1])],
 						"image": str(image_path.relative_to(out_dir)),
 						"data": str(frame_path.relative_to(out_dir)),
+						"obs_yaml": str(obs_path.relative_to(out_dir)),
 					}
 				)
 
 				global_frame_idx += 1
 
 				if terminated or truncated:
+					should_stop = True
 					break
+
+			if should_stop:
+				if args.reset_every_pass:
+					print("Environment terminated/truncated; continuing with next pass after reset.")
+					should_stop = False
+					continue
+				print("Environment terminated/truncated; stopping early because reset-every-pass is disabled.")
+				break
 	finally:
 		env.close()
 
@@ -163,8 +307,12 @@ def main():
 	with manifest_path.open("w", encoding="utf-8") as f:
 		json.dump(manifest, f, indent=2)
 
+	gif_path = save_gif(saved_image_paths, out_dir / "rollout.gif", duration_ms=args.gif_duration_ms)
+
 	print(f"Saved {global_frame_idx} frames to {out_dir}")
 	print(f"Manifest: {manifest_path}")
+	if gif_path is not None:
+		print(f"GIF: {gif_path}")
 
 
 if __name__ == "__main__":
