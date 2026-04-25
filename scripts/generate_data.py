@@ -8,6 +8,8 @@ import gym_pusht
 import numpy as np
 from PIL import Image
 
+from gym_pusht.utils.point_mapper import compute_image_points, extrude_points_to_3d, plot_3d_points
+
 
 def parse_args():
 	parser = argparse.ArgumentParser(description="Collect random PushT frames and save image/observation/action.")
@@ -57,6 +59,7 @@ def make_output_dir(output_dir_arg: str | None) -> Path:
 	(out_dir / "images").mkdir(parents=True, exist_ok=True)
 	(out_dir / "frames").mkdir(parents=True, exist_ok=True)
 	(out_dir / "obs").mkdir(parents=True, exist_ok=True)
+	(out_dir / "threed").mkdir(parents=True, exist_ok=True)
 	return out_dir
 
 
@@ -172,16 +175,13 @@ def save_frame(
 	out_dir: Path,
 	frame_idx: int,
 	image: np.ndarray,
-	observation: np.ndarray,
 	action: np.ndarray,
 	info: dict,
 ):
 	image_path = out_dir / "images" / f"frame_{frame_idx:06d}.png"
-	frame_path = out_dir / "frames" / f"frame_{frame_idx:06d}.npz"
 	obs_path = out_dir / "obs" / f"frame_{frame_idx:06d}.yaml"
 
 	Image.fromarray(image).save(image_path)
-	np.savez_compressed(frame_path, observation=observation, action=action)
 
 	info_clean = _to_python(info)
 	action_values = [float(x) for x in np.asarray(action).reshape(-1)]
@@ -197,7 +197,38 @@ def save_frame(
 	with obs_path.open("w", encoding="utf-8") as f:
 		_write_yaml(f, yaml_payload, indent=0)
 
-	return image_path, frame_path, obs_path
+	return image_path, obs_path
+
+
+def save_threed_frame(
+	out_dir: Path,
+	frame_idx: int,
+	observation: np.ndarray,
+	action: np.ndarray,
+	point_spacing: float = 9.0,
+	num_layers: int = 4,
+):
+	threed_path = out_dir / "threed" / f"frame_{frame_idx:06d}.png"
+	body_points, origin_point, agent_point, action_point = compute_image_points(
+		observation,
+		action,
+		point_spacing=point_spacing,
+	)
+	body_points_3d = extrude_points_to_3d(body_points, num_layers=num_layers, point_spacing=point_spacing)
+	z_layer = (num_layers / 2.0) * point_spacing
+	center_point_3d = np.array([origin_point[0], origin_point[1], z_layer], dtype=np.float64)
+	agent_point_3d = np.array([agent_point[0], agent_point[1], z_layer], dtype=np.float64)
+	action_point_3d = np.array([action_point[0], action_point[1], z_layer], dtype=np.float64)
+
+	plot_3d_points(
+		body_points_3d,
+		center_point_3d=center_point_3d,
+		agent_point_3d=agent_point_3d,
+		action_point_3d=action_point_3d,
+		output_path=str(threed_path),
+	)
+
+	return threed_path, body_points_3d
 
 
 def save_gif(image_paths: list[Path], output_path: Path, duration_ms: int = 50):
@@ -241,6 +272,8 @@ def main():
 
 	global_frame_idx = 0
 	saved_image_paths: list[Path] = []
+	saved_threed_paths: list[Path] = []
+	body_points_3d_steps: list[np.ndarray] = []
 
 	try:
 		observation, info = env.reset()
@@ -262,15 +295,22 @@ def main():
 				observation, reward, terminated, truncated, info = env.step(action_noisy)
 				image = env.render()
 
-				image_path, frame_path, obs_path = save_frame(
+				image_path, obs_path = save_frame(
 					out_dir=out_dir,
 					frame_idx=global_frame_idx,
 					image=image,
-					observation=observation,
 					action=action_noisy,
 					info=info,
 				)
+				threed_path, body_points_3d = save_threed_frame(
+					out_dir=out_dir,
+					frame_idx=global_frame_idx,
+					observation=observation,
+					action=action_noisy,
+				)
 				saved_image_paths.append(image_path)
+				saved_threed_paths.append(threed_path)
+				body_points_3d_steps.append(body_points_3d)
 
 				manifest["frames"].append(
 					{
@@ -282,8 +322,9 @@ def main():
 						"line_start": [float(line_start[0]), float(line_start[1])],
 						"line_end": [float(line_end[0]), float(line_end[1])],
 						"image": str(image_path.relative_to(out_dir)),
-						"data": str(frame_path.relative_to(out_dir)),
 						"obs_yaml": str(obs_path.relative_to(out_dir)),
+						"threed": str(threed_path.relative_to(out_dir)),
+						"body_points_3d_index": global_frame_idx,
 					}
 				)
 
@@ -303,16 +344,28 @@ def main():
 	finally:
 		env.close()
 
+	body_points_3d_path = out_dir / "frames" / "body_points_3d.npy"
+	if body_points_3d_steps:
+		body_points_3d_tensor = np.stack(body_points_3d_steps, axis=0)
+	else:
+		body_points_3d_tensor = np.empty((0, 0, 3), dtype=np.float64)
+	np.save(body_points_3d_path, body_points_3d_tensor)
+	manifest["body_points_3d_npy"] = str(body_points_3d_path.relative_to(out_dir))
+	manifest["body_points_3d_shape"] = list(body_points_3d_tensor.shape)
+
 	manifest_path = out_dir / "manifest.json"
 	with manifest_path.open("w", encoding="utf-8") as f:
 		json.dump(manifest, f, indent=2)
 
 	gif_path = save_gif(saved_image_paths, out_dir / "rollout.gif", duration_ms=args.gif_duration_ms)
+	threed_gif_path = save_gif(saved_threed_paths, out_dir / "rollout_3d.gif", duration_ms=args.gif_duration_ms)
 
 	print(f"Saved {global_frame_idx} frames to {out_dir}")
 	print(f"Manifest: {manifest_path}")
 	if gif_path is not None:
 		print(f"GIF: {gif_path}")
+	if threed_gif_path is not None:
+		print(f"3D GIF: {threed_gif_path}")
 
 
 if __name__ == "__main__":
