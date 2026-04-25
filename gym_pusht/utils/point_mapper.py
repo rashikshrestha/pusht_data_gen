@@ -36,21 +36,21 @@ def save_raw_image(image, output_path="raw.jpg"):
     print(f"Saved render to {output_path}")
 
 
-def plot_t_coverage(image, center_image, agent_image, action_img, t_image_points, output_path="plot_bx_by.png"):
+def plot_t_coverage(image, origin_point, agent_point, action_point, body_points, output_path="plot_bx_by.png"):
     fig, ax_plot = plt.subplots(1, 1, figsize=(7, 7))
     ax_plot.imshow(image)
     ax_plot.scatter(
-        t_image_points[:, 0],
-        t_image_points[:, 1],
+        body_points[:, 0],
+        body_points[:, 1],
         c="gray",
         s=18,
         alpha=0.9,
         zorder=6,
         label="Body",
     )
-    ax_plot.scatter([center_image[0]], [center_image[1]], c="red", s=100, zorder=5, label="Center")
-    ax_plot.scatter([agent_image[0]], [agent_image[1]], c="cyan", s=500, zorder=5, label="Agent")
-    ax_plot.scatter([action_img[0]], [action_img[1]], c="lime", s=200, marker="*", zorder=7, label="Action")
+    ax_plot.scatter([origin_point[0]], [origin_point[1]], c="red", s=100, zorder=5, label="Center")
+    ax_plot.scatter([agent_point[0]], [agent_point[1]], c="cyan", s=500, zorder=5, label="Agent")
+    ax_plot.scatter([action_point[0]], [action_point[1]], c="lime", s=200, marker="*", zorder=7, label="Action")
     ax_plot.legend(loc="upper right")
     ax_plot.set_title("Block position and T coverage points")
     ax_plot.set_xlabel("X (pixels)")
@@ -58,7 +58,7 @@ def plot_t_coverage(image, center_image, agent_image, action_img, t_image_points
     plt.tight_layout()
     plt.savefig(output_path, dpi=150)
     plt.close(fig)
-    print(f"Saved matplotlib plot to {output_path} (center=({center_image[0]:.2f}, {center_image[1]:.2f}))")
+    print(f"Saved matplotlib plot to {output_path} (center=({origin_point[0]:.2f}, {origin_point[1]:.2f}))")
 
 
 def plot_3d_points(points_3d, center_point_3d=None, agent_point_3d=None, output_path="mapped_3d.png"):
@@ -102,27 +102,25 @@ def plot_3d_points(points_3d, center_point_3d=None, agent_point_3d=None, output_
 
 
 def compute_image_points(observation, action, scale=30.0, length=4.0, point_spacing=6.0):
-    """Return body coverage points, block center, agent point, and action point — all in image coordinates.
+    """Return body, origin, agent, and action points — all in image coordinates.
 
     Returns:
-        body_image:   (N, 2) array of T-coverage points in image coords
-        center_image: (2,)   block center in image coords
-        agent_image:  (2,)   agent position in image coords
-        action_image: (2,)   sampled action target in image coords
-        t_world_points: (N, 2) body points in world coords (for diagnostics)
-        t_local_points: (N, 2) body points in local coords (for diagnostics)
+        body_points:  (N, 2) array of T-coverage points in image coords
+        origin_point: (2,)   block center in image coords
+        agent_point:  (2,)   agent position in image coords
+        action_point: (2,)   sampled action target in image coords
     """
     ax, ay, bx, by, ba = observation
 
     t_local_points = generate_t_local_points(scale=scale, length=length, point_spacing=point_spacing)
     t_world_points = transform_points_to_world(t_local_points, bx, by, ba)
-    body_image = world_to_image(t_world_points)
+    body_points = world_to_image(t_world_points)
 
-    center_image = world_to_image(np.array([[bx, by]], dtype=np.float64))[0]
-    agent_image = world_to_image(np.array([[ax, ay]], dtype=np.float64))[0]
-    action_image = world_to_image(np.array([action], dtype=np.float64))[0]
+    origin_point = world_to_image(np.array([[bx, by]], dtype=np.float64))[0]
+    agent_point = world_to_image(np.array([[ax, ay]], dtype=np.float64))[0]
+    action_point = world_to_image(np.array([action], dtype=np.float64))[0]
 
-    return body_image, center_image, agent_image, action_image, t_world_points, t_local_points
+    return body_points, origin_point, agent_point, action_point
 
 
 def extrude_points_to_3d(body_points_2d, num_layers=4, point_spacing=6.0):
@@ -143,9 +141,9 @@ def extrude_points_to_3d(body_points_2d, num_layers=4, point_spacing=6.0):
     return np.vstack(layers)
 
 
-def print_point_summary(t_local_points, t_world_points):
-    print(f"Generated {len(t_local_points)} local points covering the T block")
-    print("Sample world points (first 10):")
-    for i, (px, py) in enumerate(t_world_points[:10]):
+def print_point_summary(body_points):
+    print(f"Generated {len(body_points)} body points")
+    print("Sample body points (first 10):")
+    for i, (px, py) in enumerate(body_points[:10]):
         print(f"  p{i}: ({px:.2f}, {py:.2f})")
 

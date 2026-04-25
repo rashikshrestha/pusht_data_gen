@@ -24,7 +24,7 @@ def main():
         point_spacing = 9.0
 
         #! Get 2D points
-        body_image, center_image, agent_image, action_image, t_world_points, t_local_points = compute_image_points(
+        body_points, origin_point, agent_point, action_point = compute_image_points(
             observation, action,
             point_spacing=point_spacing
         )
@@ -32,16 +32,16 @@ def main():
         #! Points to 3D
         num_layers = 4
         body_points_3d = extrude_points_to_3d(
-            t_world_points, num_layers=num_layers, point_spacing=point_spacing
+            body_points, num_layers=num_layers, point_spacing=point_spacing
         )
         z_layer = (num_layers/2) * point_spacing
-        center_point_3d = np.array([center_image[0], center_image[1], z_layer], dtype=np.float64)
-        agent_point_3d = np.array([agent_image[0], agent_image[1], z_layer], dtype=np.float64)
-        action_point_3d = np.array([action_image[0], action_image[1], z_layer], dtype=np.float64)
+        center_point_3d = np.array([origin_point[0], origin_point[1], z_layer], dtype=np.float64)
+        agent_point_3d = np.array([agent_point[0], agent_point[1], z_layer], dtype=np.float64)
+        action_point_3d = np.array([action_point[0], action_point[1], z_layer], dtype=np.float64)
 
         #! Print and Plots
-        print_point_summary(t_local_points, t_world_points)
-        plot_t_coverage(image, center_image, agent_image, action_image, body_image, output_path="mapped.png")
+        print_point_summary(body_points)
+        plot_t_coverage(image, origin_point, agent_point, action_point, body_points, output_path="mapped.png")
         plot_3d_points(
             body_points_3d,
             center_point_3d=center_point_3d,
