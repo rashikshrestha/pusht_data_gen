@@ -28,7 +28,7 @@ def run_single_step(env):
     observation, reward, terminated, truncated, info = env.step(action)
     image = env.render()  # (680, 680, 3) numpy array
     print("Rendered image shape:", image.shape)
-    return observation, image
+    return observation, action, image
 
 
 def generate_t_local_points(scale=30.0, length=4.0, point_spacing=6.0):
@@ -64,19 +64,21 @@ def save_raw_image(image, output_path="raw.jpg"):
     print(f"Saved render to {output_path}")
 
 
-def plot_t_coverage(image, bx_img, by_img, t_image_points, ba, output_path="plot_bx_by.png"):
+def plot_t_coverage(image, bx_img, by_img, ax_img, ay_img, action_img, t_image_points, ba, output_path="plot_bx_by.png"):
     fig, ax_plot = plt.subplots(1, 1, figsize=(7, 7))
     ax_plot.imshow(image)
-    ax_plot.scatter([bx_img], [by_img], c="red", s=100, zorder=5, label=f"center ({bx_img:.1f}, {by_img:.1f})")
     ax_plot.scatter(
         t_image_points[:, 0],
         t_image_points[:, 1],
-        c="yellow",
+        c="gray",
         s=18,
         alpha=0.9,
         zorder=6,
-        label="T coverage points",
+        label="Body",
     )
+    ax_plot.scatter([bx_img], [by_img], c="red", s=100, zorder=5, label="Center")
+    ax_plot.scatter([ax_img], [ay_img], c="cyan", s=500, zorder=5, label="Agent")
+    ax_plot.scatter([action_img[0]], [action_img[1]], c="lime", s=200, marker="*", zorder=7, label=f"Actio")
     ax_plot.legend(loc="upper right")
     ax_plot.set_title("Block position and T coverage points")
     ax_plot.set_xlabel("X (pixels)")
@@ -97,8 +99,8 @@ def print_point_summary(t_local_points, t_world_points):
 def main():
     env = create_env()
     try:
-        observation, image = run_single_step(env)
-        _, _, bx, by, ba = observation
+        observation, action, image = run_single_step(env)
+        ax, ay, bx, by, ba = observation
 
         t_local_points = generate_t_local_points(scale=30.0, length=4.0, point_spacing=6.0)
         t_world_points = transform_points_to_world(t_local_points, bx, by, ba)
@@ -106,11 +108,18 @@ def main():
         center_world = np.array([[bx, by]], dtype=np.float64)
         center_image = world_to_image(center_world)
         bx_img, by_img = center_image[0]
+
+        action_world = np.array([[ax, ay]], dtype=np.float64)
+        action_image = world_to_image(action_world)
+        ax_img, ay_img = action_image[0]
+
+        action_img = world_to_image(np.array([action], dtype=np.float64))[0]
+
         t_image_points = world_to_image(t_world_points)
 
         print_point_summary(t_local_points, t_world_points)
         save_raw_image(image, output_path="raw.jpg")
-        plot_t_coverage(image, bx_img, by_img, t_image_points, ba, output_path="plot_bx_by.png")
+        plot_t_coverage(image, bx_img, by_img, ax_img, ay_img, action_img, t_image_points, ba, output_path="plot_bx_by.png")
     finally:
         env.close()
         pygame.quit()
