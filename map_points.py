@@ -64,6 +64,46 @@ def plot_t_coverage(image, center_image, agent_image, action_img, t_image_points
     print(f"Saved matplotlib plot to {output_path} (center=({center_image[0]:.2f}, {center_image[1]:.2f}))")
 
 
+def plot_3d_points(points_3d, center_point_3d=None, agent_point_3d=None, output_path="mapped_3d.png"):
+    fig = plt.figure(figsize=(8, 7))
+    ax = fig.add_subplot(111, projection="3d")
+    ax.scatter(points_3d[:, 0], points_3d[:, 1], points_3d[:, 2], c=points_3d[:, 2], cmap="viridis", s=8)
+    if center_point_3d is not None:
+        ax.scatter(
+            [center_point_3d[0]],
+            [center_point_3d[1]],
+            [center_point_3d[2]],
+            c="red",
+            s=100,
+            marker="o",
+            label="Center 3D",
+        )
+    if agent_point_3d is not None:
+        ax.scatter(
+            [agent_point_3d[0]],
+            [agent_point_3d[1]],
+            [agent_point_3d[2]],
+            c="cyan",
+            s=140,
+            marker="^",
+            label="Agent 3D",
+        )
+    ax.set_title("Extruded T-body 3D points")
+    ax.set_xlabel("X")
+    ax.set_ylabel("Y")
+    ax.set_zlabel("Z")
+    # same limits for all axes to preserve spatial relationships
+    ax.set_xlim(0, 680)
+    ax.set_ylim(0, 680)
+    ax.set_zlim(0, 680)
+    if center_point_3d is not None or agent_point_3d is not None:
+        ax.legend(loc="upper right")
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved 3D matplotlib plot to {output_path} (num_points={len(points_3d)})")
+
+
 def compute_image_points(observation, action, scale=30.0, length=4.0, point_spacing=6.0):
     """Return body coverage points, block center, agent point, and action point — all in image coordinates.
 
@@ -88,6 +128,24 @@ def compute_image_points(observation, action, scale=30.0, length=4.0, point_spac
     return body_image, center_image, agent_image, action_image, t_world_points, t_local_points
 
 
+def extrude_points_to_3d(body_points_2d, num_layers=4, point_spacing=6.0):
+    """Stack 2D body points into layered 3D points along the Z axis.
+
+    Args:
+        body_points_2d: (N, 2) array of XY points
+        num_layers:     number of Z layers (default 4)
+        point_spacing:  distance between layers, same as XY point spacing
+
+    Returns:
+        (N * num_layers, 3) array of XYZ points, z starting at 0
+    """
+    layers = [
+        np.column_stack([body_points_2d, np.full(len(body_points_2d), i * point_spacing)])
+        for i in range(num_layers)
+    ]
+    return np.vstack(layers)
+
+
 def print_point_summary(t_local_points, t_world_points):
     print(f"Generated {len(t_local_points)} local points covering the T block")
     print("Sample world points (first 10):")
@@ -107,20 +165,37 @@ def main():
     )
 
     try:
+        #! Get observation, action, reward, and rendered image
         observation, info = env.reset()
         action = env.action_space.sample()
         observation, reward, terminated, truncated, info = env.step(action)
         image = env.render()  # (680, 680, 3)
+        point_spacing = 9.0
 
+        #! Get 2D points
         body_image, center_image, agent_image, action_image, t_world_points, t_local_points = compute_image_points(
             observation, action,
-            point_spacing=9.0
+            point_spacing=point_spacing
         )
 
+        #! Points to 3D
+        num_layers = 4
+        body_points_3d = extrude_points_to_3d(
+            t_world_points, num_layers=num_layers, point_spacing=point_spacing
+        )
+        z_layer = (num_layers/2) * point_spacing
+        center_point_3d = np.array([center_image[0], center_image[1], z_layer], dtype=np.float64)
+        agent_point_3d = np.array([agent_image[0], agent_image[1], z_layer], dtype=np.float64)
 
+        #! Print and Plots
         print_point_summary(t_local_points, t_world_points)
-        save_raw_image(image, output_path="raw.jpg")
         plot_t_coverage(image, center_image, agent_image, action_image, body_image, output_path="mapped.png")
+        plot_3d_points(
+            body_points_3d,
+            center_point_3d=center_point_3d,
+            agent_point_3d=agent_point_3d,
+            output_path="mapped_3d.png",
+        )
     finally:
         env.close()
         pygame.quit()
