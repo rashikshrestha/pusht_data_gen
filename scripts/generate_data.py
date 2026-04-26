@@ -1,5 +1,6 @@
 import argparse
 import json
+import pickle
 from datetime import datetime
 from pathlib import Path
 
@@ -214,15 +215,12 @@ def save_frame(
 	return image_path, obs_path
 
 
-def save_threed_frame(
-	out_dir: Path,
-	frame_idx: int,
+def compute_3d_points(
 	observation: np.ndarray,
 	action: np.ndarray,
 	point_spacing: float = 9.0,
 	num_layers: int = 4,
 ):
-	threed_path = out_dir / "threed" / f"frame_{frame_idx:06d}.png"
 	body_points, origin_point, agent_point, action_point = compute_image_points(
 		observation,
 		action,
@@ -233,16 +231,34 @@ def save_threed_frame(
 	center_point_3d = np.array([origin_point[0], origin_point[1], z_layer], dtype=np.float64)
 	agent_point_3d = np.array([agent_point[0], agent_point[1], z_layer], dtype=np.float64)
 	action_point_3d = np.array([action_point[0], action_point[1], z_layer], dtype=np.float64)
+	return body_points_3d, center_point_3d, agent_point_3d, action_point_3d
 
-	plot_3d_points(
-		body_points_3d,
-		center_point_3d=center_point_3d,
-		agent_point_3d=agent_point_3d,
-		action_point_3d=action_point_3d,
-		output_path=str(threed_path),
+
+def save_threed_frame(
+	out_dir: Path,
+	frame_idx: int,
+	observation: np.ndarray,
+	action: np.ndarray,
+	point_spacing: float = 9.0,
+	num_layers: int = 4,
+):
+	threed_path = out_dir / "threed" / f"frame_{frame_idx:06d}.png"
+	body_points_3d, center_point_3d, agent_point_3d, action_point_3d = compute_3d_points(
+		observation, action, point_spacing=point_spacing, num_layers=num_layers
 	)
 
-	return threed_path, body_points_3d
+	if threed_path.parent.exists():
+		plot_3d_points(
+			body_points_3d,
+			center_point_3d=center_point_3d,
+			agent_point_3d=agent_point_3d,
+			action_point_3d=action_point_3d,
+			output_path=str(threed_path),
+		)
+	else:
+		threed_path = None
+
+	return threed_path, body_points_3d, center_point_3d, agent_point_3d, action_point_3d
 
 
 def save_gif(image_paths: list[Path], output_path: Path, duration_ms: int = 50):
@@ -291,6 +307,8 @@ def main():
 	saved_image_paths: list[Path] = []
 	saved_threed_paths: list[Path] = []
 	body_points_3d_steps: list[np.ndarray] = []
+	frames_3d_data: list[dict] = []
+	(out_dir / "frames").mkdir(parents=True, exist_ok=True)
 
 	try:
 		observation, info = env.reset()
@@ -322,15 +340,26 @@ def main():
 				)
 
 				threed_path = None
+				body_pts_3d, center_pt_3d, agent_pt_3d, action_pt_3d = compute_3d_points(
+					observation, action_noisy
+				)
+				body_points_3d_steps.append(body_pts_3d)
+				frames_3d_data.append({
+					"idx": global_frame_idx,
+					"body": body_pts_3d,
+					"center": center_pt_3d,
+					"agent": agent_pt_3d,
+					"action": action_pt_3d,
+				})
 				if args.save_threed:
-					threed_path, body_points_3d = save_threed_frame(
+					threed_path, _, _, _, _ = save_threed_frame(
 						out_dir=out_dir,
 						frame_idx=global_frame_idx,
 						observation=observation,
 						action=action_noisy,
 					)
-					saved_threed_paths.append(threed_path)
-					body_points_3d_steps.append(body_points_3d)
+					if threed_path is not None:
+						saved_threed_paths.append(threed_path)
 
 				if image_path is not None:
 					saved_image_paths.append(image_path)
@@ -369,14 +398,20 @@ def main():
 	finally:
 		env.close()
 
-	body_points_3d_path = out_dir  / "body_points_3d.npy"
+	frames_dir = out_dir / "frames"
+	body_points_3d_path = frames_dir / "body_points_3d.npy"
 	if body_points_3d_steps:
 		body_points_3d_tensor = np.stack(body_points_3d_steps, axis=0)
-		np.save(body_points_3d_path, body_points_3d_tensor)
-		manifest["body_points_3d_npy"] = str(body_points_3d_path.relative_to(out_dir))
-		manifest["body_points_3d_shape"] = list(body_points_3d_tensor.shape)
 	else:
 		body_points_3d_tensor = np.empty((0, 0, 3), dtype=np.float64)
+	np.save(body_points_3d_path, body_points_3d_tensor)
+	manifest["body_points_3d_npy"] = str(body_points_3d_path.relative_to(out_dir))
+	manifest["body_points_3d_shape"] = list(body_points_3d_tensor.shape)
+
+	points_3d_pkl_path = frames_dir / "points_3d.pkl"
+	with points_3d_pkl_path.open("wb") as f:
+		pickle.dump(frames_3d_data, f)
+	manifest["points_3d_pkl"] = str(points_3d_pkl_path.relative_to(out_dir))
 
 	manifest_path = out_dir / "manifest.json"
 	with manifest_path.open("w", encoding="utf-8") as f:
