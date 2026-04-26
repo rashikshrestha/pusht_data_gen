@@ -9,4 +9,5 @@ dependencies = [
     "matplotlib>=3.10.9",
     "pillow>=11.0.0",
     "pymunk==6.6.0",
+    "tqdm>=4.67.3",
 ]
