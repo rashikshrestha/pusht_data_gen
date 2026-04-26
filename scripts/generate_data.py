@@ -1,13 +1,13 @@
 import argparse
 import json
 import pickle
-from datetime import datetime
 from pathlib import Path
 
 import gymnasium as gym
 import gym_pusht
 import numpy as np
 from PIL import Image
+from tqdm import tqdm
 
 from gym_pusht.utils.point_mapper import compute_image_points, extrude_points_to_3d, plot_3d_points
 
@@ -19,8 +19,8 @@ def parse_args():
 	parser.add_argument(
 		"--save-images",
 		action=argparse.BooleanOptionalAction,
-		default=True,
-		help="Whether to save 2D rendered images and rollout GIF (default: true).",
+		default=False,
+		help="Whether to save 2D rendered images and rollout GIF (default: false).",
 	)
 	parser.add_argument(
 		"--save-threed",
@@ -51,19 +51,28 @@ def parse_args():
 		"--output-dir",
 		type=str,
 		default=None,
-		help="Optional output directory. If omitted, uses data/run_<timestamp>.",
+		help="Optional base output directory. If omitted, uses data/pusht_data.",
+	)
+	parser.add_argument(
+		"--max-seq",
+		type=int,
+		default=0,
+		help="Maximum sequence index to generate (inclusive).",
+	)
+	parser.add_argument(
+		"--start-seq",
+		type=int,
+		default=0,
+		help="Starting sequence index to generate (inclusive).",
 	)
 	parser.add_argument("--seed", type=int, default=None, help="Optional random seed for pass directions.")
+	parser.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=False, help="Whether to print verbose logs during generation.")
 	return parser.parse_args()
 
 
-def make_output_dir(output_dir_arg: str | None) -> Path:
-	if output_dir_arg:
-		out_dir = Path(output_dir_arg)
-	else:
-		timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-		out_dir = Path("data") / f"run_{timestamp}"
-
+def make_output_dir(output_dir_arg: str | None, sequence_idx: int) -> Path:
+	base_dir = Path(output_dir_arg) if output_dir_arg else Path("data") / "pusht_data"
+	out_dir = base_dir / f"{sequence_idx:04d}"
 	out_dir.mkdir(parents=True, exist_ok=True)
 	(out_dir / "obs").mkdir(parents=True, exist_ok=True)
 	return out_dir
@@ -281,14 +290,15 @@ def save_gif(image_paths: list[Path], output_path: Path, duration_ms: int = 50):
 	return output_path
 
 
-def main():
-	args = parse_args()
-	out_dir = make_output_dir(args.output_dir)
+def run_single_sequence(args, sequence_idx: int):
+	out_dir = make_output_dir(args.output_dir, sequence_idx=sequence_idx)
 	ensure_output_subdirs(out_dir, save_images=args.save_images, save_threed=args.save_threed)
 	env = create_env(args)
-	rng = np.random.default_rng(args.seed)
+	seq_seed = None if args.seed is None else args.seed + sequence_idx
+	rng = np.random.default_rng(seq_seed)
 
 	manifest = {
+		"sequence_index": sequence_idx,
 		"passes": args.passes,
 		"steps_per_pass": args.steps_per_pass,
 		"save_images": args.save_images,
@@ -297,7 +307,7 @@ def main():
 		"target_noise": args.target_noise,
 		"action_noise": args.action_noise,
 		"gif_duration_ms": args.gif_duration_ms,
-		"seed": args.seed,
+		"seed": seq_seed,
 		"observation_shape": [5],
 		"action_shape": [2],
 		"frames": [],
@@ -307,7 +317,8 @@ def main():
 	saved_image_paths: list[Path] = []
 	saved_threed_paths: list[Path] = []
 	body_points_3d_steps: list[np.ndarray] = []
-	(out_dir / "frames").mkdir(parents=True, exist_ok=True)
+	frames_dir = out_dir / "frames"
+	frames_dir.mkdir(parents=True, exist_ok=True)
 
 	try:
 		observation, info = env.reset()
@@ -343,7 +354,7 @@ def main():
 					observation, action_noisy
 				)
 				body_points_3d_steps.append(body_pts_3d)
-				points_3d_pkl_path = out_dir / "frames" / f"frame_{global_frame_idx:06d}.pkl"
+				points_3d_pkl_path = frames_dir / f"frame_{global_frame_idx:06d}.pkl"
 				with points_3d_pkl_path.open("wb") as f:
 					pickle.dump(
 						{
@@ -404,22 +415,34 @@ def main():
 		env.close()
 
 
-    #! Save the manifest JSON
+    #! Save Manifest
 	manifest_path = out_dir / "manifest.json"
 	with manifest_path.open("w", encoding="utf-8") as f:
 		json.dump(manifest, f, indent=2)
 
-    #! Save the GIFs if we have
+    #! Save GIFs if exists
 	gif_path = save_gif(saved_image_paths, out_dir / "rollout.gif", duration_ms=args.gif_duration_ms)
 	threed_gif_path = save_gif(saved_threed_paths, out_dir / "rollout_3d.gif", duration_ms=args.gif_duration_ms)
 
     #! Final report
-	print(f"Saved {global_frame_idx} frames to {out_dir}")
-	print(f"Manifest: {manifest_path}")
-	if gif_path is not None:
-		print(f"GIF: {gif_path}")
-	if threed_gif_path is not None:
-		print(f"3D GIF: {threed_gif_path}")
+	if args.verbose:
+		print(f"[{sequence_idx:04d}] Saved {global_frame_idx} frames to {out_dir}")
+		print(f"Manifest: {manifest_path}")
+		if gif_path is not None:
+			print(f"GIF: {gif_path}")
+		if threed_gif_path is not None:
+			print(f"3D GIF: {threed_gif_path}")
+
+
+def main():
+	args = parse_args()
+	if args.start_seq < 0 or args.max_seq < 0:
+		raise ValueError("start-seq and max-seq must be non-negative")
+	if args.start_seq > args.max_seq:
+		raise ValueError("start-seq must be <= max-seq")
+
+	for sequence_idx in tqdm(range(args.start_seq, args.max_seq + 1)):
+		run_single_sequence(args, sequence_idx=sequence_idx)
 
 
 if __name__ == "__main__":
