@@ -16,6 +16,18 @@ def parse_args():
 	parser.add_argument("--passes", type=int, default=6, help="Number of straight-line passes to collect.")
 	parser.add_argument("--steps-per-pass", type=int, default=200, help="Number of actions in each straight-line pass.")
 	parser.add_argument(
+		"--save-images",
+		action=argparse.BooleanOptionalAction,
+		default=True,
+		help="Whether to save 2D rendered images and rollout GIF (default: true).",
+	)
+	parser.add_argument(
+		"--save-threed",
+		action=argparse.BooleanOptionalAction,
+		default=False,
+		help="Whether to save per-frame 3D renders and 3D GIF (default: false).",
+	)
+	parser.add_argument(
 		"--reset-every-pass",
 		action=argparse.BooleanOptionalAction,
 		default=True,
@@ -41,10 +53,6 @@ def parse_args():
 		help="Optional output directory. If omitted, uses data/run_<timestamp>.",
 	)
 	parser.add_argument("--seed", type=int, default=None, help="Optional random seed for pass directions.")
-	parser.add_argument("--observation-width", type=int, default=96)
-	parser.add_argument("--observation-height", type=int, default=96)
-	parser.add_argument("--visualization-width", type=int, default=680)
-	parser.add_argument("--visualization-height", type=int, default=680)
 	return parser.parse_args()
 
 
@@ -56,21 +64,25 @@ def make_output_dir(output_dir_arg: str | None) -> Path:
 		out_dir = Path("data") / f"run_{timestamp}"
 
 	out_dir.mkdir(parents=True, exist_ok=True)
-	(out_dir / "images").mkdir(parents=True, exist_ok=True)
-	(out_dir / "frames").mkdir(parents=True, exist_ok=True)
 	(out_dir / "obs").mkdir(parents=True, exist_ok=True)
-	(out_dir / "threed").mkdir(parents=True, exist_ok=True)
 	return out_dir
+
+
+def ensure_output_subdirs(out_dir: Path, save_images: bool, save_threed: bool):
+	if save_images:
+		(out_dir / "images").mkdir(parents=True, exist_ok=True)
+	if save_threed:
+		(out_dir / "threed").mkdir(parents=True, exist_ok=True)
 
 
 def create_env(args):
 	return gym.make(
 		"gym_pusht/PushT-v0",
 		render_mode="rgb_array",
-		observation_width=args.observation_width,
-		observation_height=args.observation_height,
-		visualization_width=args.visualization_width,
-		visualization_height=args.visualization_height,
+		observation_width=96,
+		observation_height=96,
+		visualization_width=680,
+		visualization_height=680,
 	)
 
 
@@ -177,11 +189,13 @@ def save_frame(
 	image: np.ndarray,
 	action: np.ndarray,
 	info: dict,
+	save_image: bool,
 ):
-	image_path = out_dir / "images" / f"frame_{frame_idx:06d}.png"
+	image_path = out_dir / "images" / f"frame_{frame_idx:06d}.png" if save_image else None
 	obs_path = out_dir / "obs" / f"frame_{frame_idx:06d}.yaml"
 
-	Image.fromarray(image).save(image_path)
+	if save_image:
+		Image.fromarray(image).save(image_path)
 
 	info_clean = _to_python(info)
 	action_values = [float(x) for x in np.asarray(action).reshape(-1)]
@@ -254,12 +268,15 @@ def save_gif(image_paths: list[Path], output_path: Path, duration_ms: int = 50):
 def main():
 	args = parse_args()
 	out_dir = make_output_dir(args.output_dir)
+	ensure_output_subdirs(out_dir, save_images=args.save_images, save_threed=args.save_threed)
 	env = create_env(args)
 	rng = np.random.default_rng(args.seed)
 
 	manifest = {
 		"passes": args.passes,
 		"steps_per_pass": args.steps_per_pass,
+		"save_images": args.save_images,
+		"save_threed": args.save_threed,
 		"reset_every_pass": args.reset_every_pass,
 		"target_noise": args.target_noise,
 		"action_noise": args.action_noise,
@@ -301,16 +318,22 @@ def main():
 					image=image,
 					action=action_noisy,
 					info=info,
+					save_image=args.save_images,
 				)
-				threed_path, body_points_3d = save_threed_frame(
-					out_dir=out_dir,
-					frame_idx=global_frame_idx,
-					observation=observation,
-					action=action_noisy,
-				)
-				saved_image_paths.append(image_path)
-				saved_threed_paths.append(threed_path)
-				body_points_3d_steps.append(body_points_3d)
+
+				threed_path = None
+				if args.save_threed:
+					threed_path, body_points_3d = save_threed_frame(
+						out_dir=out_dir,
+						frame_idx=global_frame_idx,
+						observation=observation,
+						action=action_noisy,
+					)
+					saved_threed_paths.append(threed_path)
+					body_points_3d_steps.append(body_points_3d)
+
+				if image_path is not None:
+					saved_image_paths.append(image_path)
 
 				manifest["frames"].append(
 					{
@@ -321,12 +344,14 @@ def main():
 						"target_point": [float(target_point[0]), float(target_point[1])],
 						"line_start": [float(line_start[0]), float(line_start[1])],
 						"line_end": [float(line_end[0]), float(line_end[1])],
-						"image": str(image_path.relative_to(out_dir)),
 						"obs_yaml": str(obs_path.relative_to(out_dir)),
-						"threed": str(threed_path.relative_to(out_dir)),
-						"body_points_3d_index": global_frame_idx,
 					}
 				)
+				if image_path is not None:
+					manifest["frames"][-1]["image"] = str(image_path.relative_to(out_dir))
+				if threed_path is not None:
+					manifest["frames"][-1]["threed"] = str(threed_path.relative_to(out_dir))
+					manifest["frames"][-1]["body_points_3d_index"] = len(body_points_3d_steps) - 1
 
 				global_frame_idx += 1
 
@@ -344,14 +369,14 @@ def main():
 	finally:
 		env.close()
 
-	body_points_3d_path = out_dir / "frames" / "body_points_3d.npy"
+	body_points_3d_path = out_dir  / "body_points_3d.npy"
 	if body_points_3d_steps:
 		body_points_3d_tensor = np.stack(body_points_3d_steps, axis=0)
+		np.save(body_points_3d_path, body_points_3d_tensor)
+		manifest["body_points_3d_npy"] = str(body_points_3d_path.relative_to(out_dir))
+		manifest["body_points_3d_shape"] = list(body_points_3d_tensor.shape)
 	else:
 		body_points_3d_tensor = np.empty((0, 0, 3), dtype=np.float64)
-	np.save(body_points_3d_path, body_points_3d_tensor)
-	manifest["body_points_3d_npy"] = str(body_points_3d_path.relative_to(out_dir))
-	manifest["body_points_3d_shape"] = list(body_points_3d_tensor.shape)
 
 	manifest_path = out_dir / "manifest.json"
 	with manifest_path.open("w", encoding="utf-8") as f:
