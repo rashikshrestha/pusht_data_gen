@@ -307,7 +307,6 @@ def main():
 	saved_image_paths: list[Path] = []
 	saved_threed_paths: list[Path] = []
 	body_points_3d_steps: list[np.ndarray] = []
-	frames_3d_data: list[dict] = []
 	(out_dir / "frames").mkdir(parents=True, exist_ok=True)
 
 	try:
@@ -344,13 +343,18 @@ def main():
 					observation, action_noisy
 				)
 				body_points_3d_steps.append(body_pts_3d)
-				frames_3d_data.append({
-					"idx": global_frame_idx,
-					"body": body_pts_3d,
-					"center": center_pt_3d,
-					"agent": agent_pt_3d,
-					"action": action_pt_3d,
-				})
+				points_3d_pkl_path = out_dir / "frames" / f"frame_{global_frame_idx:06d}.pkl"
+				with points_3d_pkl_path.open("wb") as f:
+					pickle.dump(
+						{
+							"idx": global_frame_idx,
+							"body": body_pts_3d,
+							"center": center_pt_3d,
+							"agent": agent_pt_3d,
+							"action": action_pt_3d,
+						},
+						f,
+					)
 				if args.save_threed:
 					threed_path, _, _, _, _ = save_threed_frame(
 						out_dir=out_dir,
@@ -374,6 +378,7 @@ def main():
 						"line_start": [float(line_start[0]), float(line_start[1])],
 						"line_end": [float(line_end[0]), float(line_end[1])],
 						"obs_yaml": str(obs_path.relative_to(out_dir)),
+						"points_3d_pkl": str(points_3d_pkl_path.relative_to(out_dir)),
 					}
 				)
 				if image_path is not None:
@@ -398,28 +403,17 @@ def main():
 	finally:
 		env.close()
 
-	frames_dir = out_dir / "frames"
-	body_points_3d_path = frames_dir / "body_points_3d.npy"
-	if body_points_3d_steps:
-		body_points_3d_tensor = np.stack(body_points_3d_steps, axis=0)
-	else:
-		body_points_3d_tensor = np.empty((0, 0, 3), dtype=np.float64)
-	np.save(body_points_3d_path, body_points_3d_tensor)
-	manifest["body_points_3d_npy"] = str(body_points_3d_path.relative_to(out_dir))
-	manifest["body_points_3d_shape"] = list(body_points_3d_tensor.shape)
 
-	points_3d_pkl_path = frames_dir / "points_3d.pkl"
-	with points_3d_pkl_path.open("wb") as f:
-		pickle.dump(frames_3d_data, f)
-	manifest["points_3d_pkl"] = str(points_3d_pkl_path.relative_to(out_dir))
-
+    #! Save the manifest JSON
 	manifest_path = out_dir / "manifest.json"
 	with manifest_path.open("w", encoding="utf-8") as f:
 		json.dump(manifest, f, indent=2)
 
+    #! Save the GIFs if we have
 	gif_path = save_gif(saved_image_paths, out_dir / "rollout.gif", duration_ms=args.gif_duration_ms)
 	threed_gif_path = save_gif(saved_threed_paths, out_dir / "rollout_3d.gif", duration_ms=args.gif_duration_ms)
 
+    #! Final report
 	print(f"Saved {global_frame_idx} frames to {out_dir}")
 	print(f"Manifest: {manifest_path}")
 	if gif_path is not None:
