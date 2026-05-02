@@ -1,3 +1,10 @@
+# Generate Data
+
+```bash
+uv run scripts/generate_data.py --passes 2 --steps-per-pass 15 --max-seq 1000
+```
+
+
 # gym-pusht
 
 A gymnasium environment PushT.
