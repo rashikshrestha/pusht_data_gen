@@ -66,6 +66,7 @@ def parse_args():
 		help="Starting sequence index to generate (inclusive).",
 	)
 	parser.add_argument("--seed", type=int, default=None, help="Optional random seed for pass directions.")
+	parser.add_argument("--scale-factor", type=float, default=0.02, help="Scale factor applied to 3D points before saving to PKL.")
 	parser.add_argument("--verbose", action=argparse.BooleanOptionalAction, default=False, help="Whether to print verbose logs during generation.")
 	return parser.parse_args()
 
@@ -193,6 +194,49 @@ def _write_yaml(f, data, indent=0):
 	f.write(f"{space}{_yaml_scalar(data)}\n")
 
 
+def _scale_numeric(value, scale_factor: float):
+	if isinstance(value, bool):
+		return value
+	if isinstance(value, (int, float, np.generic)):
+		return float(value) * scale_factor
+	return value
+
+
+def _scale_coordinates_in_yaml(data, scale_factor: float):
+	if not isinstance(data, dict):
+		return data
+
+	coordinate_vector_keys = {
+		"action",
+		"pos_agent",
+		"vel_agent",
+	}
+	pose_keys = {"block_pose", "goal_pose"}
+
+	scaled = {}
+	for key, value in data.items():
+		if key in coordinate_vector_keys and isinstance(value, list):
+			scaled[key] = [_scale_numeric(v, scale_factor) for v in value]
+			continue
+
+		if key in pose_keys and isinstance(value, list):
+			scaled_pose = []
+			for idx, v in enumerate(value):
+				if idx == 2:
+					scaled_pose.append(v)
+				else:
+					scaled_pose.append(_scale_numeric(v, scale_factor))
+			scaled[key] = scaled_pose
+			continue
+
+		if isinstance(value, dict):
+			scaled[key] = _scale_coordinates_in_yaml(value, scale_factor)
+		else:
+			scaled[key] = value
+
+	return scaled
+
+
 def save_frame(
 	out_dir: Path,
 	frame_idx: int,
@@ -200,6 +244,7 @@ def save_frame(
 	action: np.ndarray,
 	info: dict,
 	save_image: bool,
+	scale_factor: float,
 ):
 	image_path = out_dir / "images" / f"frame_{frame_idx:06d}.png" if save_image else None
 	obs_path = out_dir / "obs" / f"frame_{frame_idx:06d}.yaml"
@@ -217,6 +262,8 @@ def save_frame(
 		yaml_payload.update(info_clean)
 	else:
 		yaml_payload["info"] = info_clean
+
+	yaml_payload = _scale_coordinates_in_yaml(yaml_payload, scale_factor=scale_factor)
 
 	with obs_path.open("w", encoding="utf-8") as f:
 		_write_yaml(f, yaml_payload, indent=0)
@@ -307,6 +354,7 @@ def run_single_sequence(args, sequence_idx: int):
 		"target_noise": args.target_noise,
 		"action_noise": args.action_noise,
 		"gif_duration_ms": args.gif_duration_ms,
+		"scale_factor": args.scale_factor,
 		"seed": seq_seed,
 		"observation_shape": [5],
 		"action_shape": [2],
@@ -347,6 +395,7 @@ def run_single_sequence(args, sequence_idx: int):
 					action=action_noisy,
 					info=info,
 					save_image=args.save_images,
+					scale_factor=args.scale_factor,
 				)
 
 				threed_path = None
@@ -354,15 +403,19 @@ def run_single_sequence(args, sequence_idx: int):
 					observation, action_noisy
 				)
 				body_points_3d_steps.append(body_pts_3d)
+				scaled_body_pts_3d = body_pts_3d * args.scale_factor
+				scaled_center_pt_3d = center_pt_3d * args.scale_factor
+				scaled_agent_pt_3d = agent_pt_3d * args.scale_factor
+				scaled_action_pt_3d = action_pt_3d * args.scale_factor
 				points_3d_pkl_path = frames_dir / f"frame_{global_frame_idx:06d}.pkl"
 				with points_3d_pkl_path.open("wb") as f:
 					pickle.dump(
 						{
 							"idx": global_frame_idx,
-							"body": body_pts_3d,
-							"center": center_pt_3d,
-							"agent": agent_pt_3d,
-							"action": action_pt_3d,
+							"body": scaled_body_pts_3d,
+							"center": scaled_center_pt_3d,
+							"agent": scaled_agent_pt_3d,
+							"action": scaled_action_pt_3d,
 						},
 						f,
 					)
